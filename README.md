@@ -18,10 +18,9 @@ std::vector< No::Option > Options {
 ## Parse
 ```
 No::Optargs args(argc, argv, Options);
-string failed_key;
-if( !args.parse(failed_key, No::Option::GNU))
+if( !args.parse(No::Option::GNU))
 {
-    args.call_help(std::cerr, failed_key);
+    args.call_help(std::cerr);
 }
 ```
 ## Use

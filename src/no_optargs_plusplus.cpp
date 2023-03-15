@@ -1,18 +1,32 @@
 #include "no_optargs_plusplus.hpp"
 
 #if defined( __WIN32__ ) ||  defined( WIN32 )
+#  include <tchar.h>
 #  include <windows.h>
 #  include <vector>
-using std::vector;
 using std::wstring;
 #endif
 
 #include <algorithm>
-#include <iostream> // cout while testing, remove later
+#include <iostream>
+#include <sstream>
 #include <system_error>
 #include <cctype>
 
+namespace std
+{
+  #if defined(UNICODE) || defined(_UNICODE)
+  wostream& tcout = wcout;
+  wostream& tcerr = wcerr;
+  #else
+  ostream& tcout = cout;
+  ostream& tcerr = cerr;
+  #endif // UNICODE
+}
+
 using std::string;
+using std::tstring;
+using std::vector;
 
 namespace No {
 
@@ -23,7 +37,7 @@ namespace No {
 #if defined(DEBUG) || !defined(NDEBUG)
 # define HANDLE_PARSER_INCOMPLETE(msg) do{ std::cerr  << ((msg)) << std::endl; } while(0)
 # define HANDLE_PARSER_ERROR(msg)      do{ std::cerr  << ((msg)) << std::endl; } while(0)
-# define HANDLE_PARSER_UNKNOWN(msg)    do{ std::cerr  << ((msg)) << std::endl; call_help( std::cerr, key ); } while(0) //; return false;
+# define HANDLE_PARSER_UNKNOWN(msg)    do{ std::cerr  << ((msg)) << std::endl; /*call_help( std::cerr, key );*/ } while(0) //; return false;
 # define HANDLE_DEFINITION_ERROR(msg)  do{ std::cerr  << ((msg)) << std::endl; } while(0)
 # define DBG_TELL(msg)                 do{ std::cerr  << ((msg)) << std::endl; } while(0)
 # define DBG_TELLw(msg)                do{ std::wcerr << ((msg)) << std::endl; } while(0)
@@ -45,12 +59,18 @@ namespace No {
 # define DBG_TELLw(msg)
 #endif
 
+static std::string  basename_of_execT( const std::tstring& argv0 );
+static std::string  basename_of_exec( const std::string& argv0 );
 static std::string  WideString2UTF8( const std::wstring& UCS2 );
 static std::wstring UTF8toWideString( const std::string& UTF8 );
 static void         cut_string_at( const std::string& input, const std::string& separators, std::string& lhs, std::string& rhs );
 static std::string  trim_quotes( const std::string& input, const std::string& separators );
-static std::string conditional_uppercase( const std::string& anycase, No::Optargs::style_t Style );
-
+static std::string  conditional_uppercase( const std::string& anycase, No::Optargs::style_t Style );
+#if defined(UNICODE) || defined(_UNICODE)
+# define tstring_to_ascii(a) WideString2UTF8(a)
+#else
+# define tstring_to_ascii(a) (a)
+#endif
 
 /* === 1 = POSIX Options ===
 Arguments are options if they begin with a hyphen delimiter ('-').
@@ -85,13 +105,15 @@ To specify an argument for a long option, write '/name:value' or '/name value', 
 
 === */
 
-Optargs::Optargs( int argc, char* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
-  : m_valuemap() // hold every value accessible by a short key (if no short key exist, one artifical short will be made for the long key)
+Optargs::Optargs( int argc, const char* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
+  : m_requirements()
+  , m_valuemap() // hold every value accessible by a short key (if no short key exist, one artifical short will be made for the long key)
   , m_access_by_name_map()  // find shortname of longname, if none exist, one artifical short will be assigned
   , m_argv()
   , m_style(style)
   , m_autonr(0)
   , m_parsed(false)
+  , m_Progname()
 {
   // always ASCII or at worst UTF-8 within the list.
   for( auto od : Liste )
@@ -107,13 +129,15 @@ Optargs::Optargs( int argc, char* argv[], const std::vector<No::Option>& Liste, 
 };
 
 #if defined( __WIN32__ ) ||  defined( WIN32 )
-Optargs::Optargs( int argc, wchar_t * argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
-  : m_valuemap() // hold every value accessible by a short key (if no short key exist, one artifical short will be made for the long key)
+Optargs::Optargs( int argc, const wchar_t * argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
+  : m_requirements()
+  , m_valuemap() // hold every value accessible by a short key (if no short key exist, one artifical short will be made for the long key)
   , m_access_by_name_map()  // find shortname of longname, if none exist, one artifical short will be assigned
   , m_argv()
   , m_style(style)
   , m_autonr(0)
   , m_parsed(false)
+  , m_Progname()
 {
   for( auto od : Liste )
   {
@@ -137,34 +161,75 @@ Optargs::~Optargs()
 // ===================================================================
 // ============================ The Getters ==========================
 // ===================================================================
-const string Optargs::getOption( const std::string& option ) const
+const std::vector<std::string> Optargs::getOptionValues( const std::string& option ) const
+{
+  string search_key( conditional_uppercase( option, m_style ) );
+  string clean_key = get_key( search_key ); // arg 2+3 are dummies here, we expect the user provided pure keys or hyphened/dashed keys.
+
+  string access_key = seek_key( clean_key );
+
+  auto value_itr = m_valuemap.find( access_key );
+  if( value_itr != m_valuemap.end() ) // found
+  {
+    return value_itr->second.m_multi;
+  }
+  return std::vector<std::string>{};
+}
+
+
+
+const string Optargs::getOptionStr( const std::string& option, int index ) const
 {
   string res("");
-  this->seek_option( option, true, res );
+  int cnt=index;
+  this->seek_option( option, true, &cnt, res );
   return res;
 }
 
 
-const std::string Optargs::getOption( const unsigned char opt_char ) const
+const std::string Optargs::getOptionStr( const unsigned char opt_char, int index ) const
 {
   if( ! m_parsed ) throw OptargNoParsed();
   string res("");
-  this->seek_option( string( 1, opt_char ), true, res );
+  int cnt=index;
+  this->seek_option( string( 1, opt_char ), true, &cnt, res );
   return res;
+}
+
+
+int Optargs::getOptionNum( const std::string & option ) const
+{
+  int cnt=0;
+  if( seek_option( option, true, &cnt ) )
+  {
+    return cnt;
+  }
+  return 0;
+}
+
+
+int Optargs::getOptionNum( const unsigned char opt_char ) const
+{
+  int cnt=0;
+  if( seek_option( string( 1, opt_char ), true, &cnt ) )
+  {
+    return cnt;
+  }
+  return 0;
 }
 
 
 bool Optargs::hasOption( const std::string& option ) const
 {
   if( ! m_parsed ) throw OptargNoParsed();
-  return this->seek_option( option );
+  return seek_option( option );
 }
 
 
 bool Optargs::hasOption( const unsigned char opt_char ) const
 {
   if( ! m_parsed ) throw OptargNoParsed();
-  return this->seek_option( string( 1, opt_char ) );
+  return seek_option( string( 1, opt_char ) );
 }
 
 
@@ -184,8 +249,18 @@ void Optargs::call_help( std::ostream& report_stream, const std::string& param )
   opt_itr = m_requirements.find( seek_key( NOOAPP_INTERNAL_HELP ) );
   if( m_requirements.end() != opt_itr && opt_itr->second.m_helptext.length() )
   {
-    report_stream << opt_itr->second.m_helptext << std::endl;
-    return;
+    size_t before_name = opt_itr->second.m_helptext.find("$(Progname)");
+    if( string::npos == before_name )
+    {
+      report_stream << opt_itr->second.m_helptext << std::endl;
+    }
+    else
+    {
+      size_t after_name = before_name + strlen("$(Progname)");
+      report_stream << opt_itr->second.m_helptext.substr(0,before_name);
+      report_stream << this->m_Progname;
+      report_stream << opt_itr->second.m_helptext.substr(after_name) << std::endl;
+    }
   }
   // neither parameter focused help text, nor generic help text assorted to 0x00 entry was found, stay silent ...  
   return;
@@ -202,18 +277,28 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
   {
     m_style = style;
   }
-  uppercase_definition();
+  uppercase_definition(); // name is misleading. not the m_Requirements map is uppercased, but the lookup-map is
   
+  m_parsed = true;
   bool only_values_following=false;
   // loop ... in m_argv
   for( size_t i=0; i < m_argv.size(); i++ )
   {
+    if( i==0 )
+    {
+      m_Progname = basename_of_exec( m_argv[0] );
+      continue;
+    }
+
+//ToDo: one single "-" should mean: read [all further] arguments from stdin
+//ToDo: "@filename" with false==access("@filename") && true==access("filename") should mean: read [all further] arguments from filename, at least in windows
+
     string key( m_argv[i] );
     string par( (i+1 < m_argv.size()) ? m_argv[i+1] : "" );
     char lead_in = key[0];
     last_option = key;
 
-    if( (Optargs::POSIX==m_style || Optargs::GNU==m_style ) && 0==key.compare( "--" ) )
+    if( (Optargs::OLDUNIX==m_style || Optargs::POSIX==m_style || Optargs::GNU==m_style ) && 0==key.compare( "--" ) )
     {
       only_values_following = true;
       continue; // skip storing also the "--" itself
@@ -221,6 +306,8 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
 
     if( (only_values_following) ||
         ((Optargs::OLDUNIX  ==m_style) && ('-'!=lead_in)) ||
+        ((Optargs::POSIX    ==m_style) && ('-'!=lead_in)) ||
+        ((Optargs::GNU      ==m_style) && ('-'!=lead_in)) ||
         ((Optargs::WINDOWS  ==m_style) && ('/'!=lead_in)) ||
         ((Optargs::GNUWINMIX==m_style) && ('/'!=lead_in) && ('-'!=lead_in))
       )
@@ -268,10 +355,12 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
             subletters_done = true; // oldunix has no -abc == -a -b -c
             if( arg_presence == Option::optional_argument )
             {
-              HANDLE_PARSER_ERROR( "this style (" + string(NOOAPP_STRINGIFY(Optargs::OLDUNIX)) + ") can not have optional arguments"); // perhaps wrong, could also be the rule the next "-word" ist a switch but next "word" is argument value
+// ToDo: this is likely wrong! I think "-argument1 value1 -argument2 --nextargument -argument3 lastargument" could have all 3 optional, because '-nextargument' can't be missinterpreted because of '--' escaping
+              HANDLE_PARSER_ERROR( "ERROR: this style (" + string(NOOAPP_STRINGIFY(Optargs::OLDUNIX)) + ") can not have optional arguments"); // perhaps wrong, could also be the rule the next "-word" ist a switch but next "word" is argument value
             }
             if( arg_presence != Option::required_argument )
             {
+// ToDo: see above
               par.clear(); // next value is _not_ the argument value.
             }
             else
@@ -284,8 +373,11 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
           case Optargs::GNUWINMIX:
             if( '/'==lead_in )
             {
-//#error "/e no_argument does append /g/g/h as parameter, WRONG!"
-              if( (arg_presence==Option::required_argument || arg_presence==Option::optional_argument) && ! split_off_values.empty() )
+              if( (arg_presence==Option::required_argument || arg_presence==Option::optional_argument) && ! split_off_keys.empty() )
+              { // windows does not allow a key with arg followed by attached next keys - 1st the arg must be there
+                HANDLE_PARSER_ERROR( "ERROR: missing argument for: " + key + " blocked by " + split_off_keys );
+              }
+              else if( (arg_presence==Option::required_argument || arg_presence==Option::optional_argument) && ! split_off_values.empty() )
               {
                 par = split_off_values;
               } // else keep next word as argument
@@ -345,10 +437,9 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
             {
               i++; // we already take the argv[i+1] next as parameter, skip over this
             }
-            else if( key.length()>1 && arg_presence==Option::optional_argument && split_off_keys.empty() )
+            else if( key.length()>1 && arg_presence==Option::optional_argument && split_off_keys.empty() && ! know_key( get_key( par ) ) )
             {
-              if( ! know_key( get_key( par ) ) )
-                i++; // we already take the argv[i+1] next as parameter, skip over this
+              i++; // we already take the argv[i+1] next as parameter, skip over this
             }
             else if( key.length()==1 && arg_presence==Option::optional_argument && ! split_off_keys.empty() ) // single letter keys can not have space-delimitted OPTIONAL value, but "glued" ones, if the next letter is not a key?
             {
@@ -381,14 +472,16 @@ bool Optargs::parse( std::string& last_option, No::Optargs::style_t style )
       DBG_TELL( string( "append_option(" ) + key + ", " + par + ")" );
       bool res = append_option( key, par ); // arg2 can be empty string
       if( !res )
-        return false;
+      {
+        HANDLE_PARSER_ERROR( string( "ERROR: can not store option " + key + " with required arguments") );
+      }
 
       key = split_off_keys;
     } while( !subletters_done );
 
   }; // end-of-for( size_t i=0; i < m_argv.size() ; i++ )
 
-  return (m_parsed = true);
+  return true;
 }
 
 // ===================================================================
@@ -487,11 +580,34 @@ void Optargs::listOptions( std::ostream& report_stream, const std::string& delim
     if( ++num>1 ) report_stream << delimitter; // separate all next entries after 1st one
 
     const string& access_key( usedentry_itr.first );
-    const string& value( usedentry_itr.second.m_value ); // can be empty string if it is only a switch!
-
     std::pair<std::string,std::string> names = get_Names( access_key );
     const string& longname  = (names.first.length() >1) ? names.first : names.second;
     const string& shortname = (names.first.length()==1) ? names.first : names.second;
+
+    string value( usedentry_itr.second.m_multi[0] ); // can be empty string if it is only a switch!
+    if( usedentry_itr.second.m_count > 1 )
+    {
+      int num=0;
+      value.assign("{");
+      for( auto next : usedentry_itr.second.m_multi )
+      {
+        if(num>0) value.append(",{");
+        value.append( next );
+        value.append("}");
+        num++;
+      }
+    }
+    else if( usedentry_itr.second.m_count == 0 && usedentry_itr.second.m_have_arg != Option::no_argument )
+    {
+      Option optdef;
+      if( get_option_definition( longname.empty() ? shortname : longname, optdef ) )
+      {
+        value.assign( "default (" );
+        value.assign( optdef.m_multi[0] );
+        value.assign( ")" );
+      }
+    }
+
 
     string printable_short( make_printable( shortname ) );
 
@@ -517,11 +633,14 @@ void Optargs::listOptions( std::ostream& report_stream, const std::string& delim
   if( ++num>1 ) report_stream << delimitter;
   report_stream << "Values:";
 
+  //report_stream << m_noopts.size() << " values,";
+  size_t nr=0;
   for( auto value : m_noopts )
   {
     if( ++num>1 ) report_stream << delimitter;
-    report_stream << value;
+    report_stream << "[" << nr++ << "] " << value;
   }
+  //report_stream << ". END.";
   report_stream << std::endl;
   return;
 }
@@ -542,15 +661,29 @@ std::string Optargs::make_next_access_key(void)
 
 // arg1 holds a cleaned key (no dash, slash, hyphen, inline arguments.
 // arg2 returns if parameter con/must/must not follow.
-bool Optargs::argument_requirement( const std::string& clean_key, Option::argtype& required ) const
+bool Optargs::get_option_definition( const std::string& clean_key, Option& opt ) const
 {
   string access_key = seek_key( conditional_uppercase( clean_key, m_style ) );
 
-  // ToDo: valuemap value is not a string but a vector of strings, to hold multiple same switches data
+// ToDo: valuemap value is not a string but a vector of strings, to hold multiple same switches data
   auto require_itr = m_requirements.find( access_key );
   if( m_requirements.end() != require_itr ) // not found in definitions: invalid switch given!
   {
-    required = require_itr->second.m_have_arg;
+    opt = require_itr->second;
+    return true;
+  }
+  return false;
+}
+
+
+// arg1 holds a cleaned key (no dash, slash, hyphen, inline arguments.
+// arg2 returns if parameter con/must/must not follow.
+bool Optargs::argument_requirement( const std::string& clean_key, Option::argtype& required ) const
+{
+  Option opt;
+  if( get_option_definition( clean_key, opt ) )  // found in definitions: switch is in property
+  {
+    required = opt.m_have_arg;
     return true;
   }
   return false;
@@ -591,8 +724,8 @@ bool Optargs::append_definition( const Option& opdef )
     m_access_by_name_map.insert( { short_keyname, access_key } );
   }
   
-  if( opdef.m_have_arg==No::Option::no_argument && !opdef.m_value.empty() )
-  { HANDLE_DEFINITION_ERROR( string("A 'no_argument' Option ") + long_keyname + "/" + make_printable( short_keyname ) + " can not have the default value:\"" + opdef.m_value + "\"" );
+  if( opdef.m_have_arg==No::Option::no_argument && !opdef.m_multi[0].empty() )
+  { HANDLE_DEFINITION_ERROR( string("A 'no_argument' Option ") + long_keyname + "/" + make_printable( short_keyname ) + " can not have the default value:\"" + opdef.m_multi[0] + "\"" );
   }
 
   m_requirements.insert( { access_key, opdef } );
@@ -628,15 +761,17 @@ bool Optargs::append_option( const std::string& clean_key, const std::string& va
   string key( conditional_uppercase( clean_key, m_style ) );
   string access_key = seek_key( key );
 
-  // ToDo: valuemap value is not a string but a vector of strings, to hold multiple same switches data
-  auto require_itr = m_requirements.find( access_key );
-  if( m_requirements.end() == require_itr ) // not found in definitions: invalid switch given!
+  // if we already have an valuemap entry, this is the 2nd or more access. So we already copied the content from requirements
+  auto require_itr = m_valuemap.find( access_key );
+  if( m_valuemap.end() == require_itr ) // we do not have an valuemap entry, this is the 1st access. Need to copy the content from requirements
   {
-    return false;
+    require_itr = m_requirements.find( access_key );
+    if( m_requirements.end() == require_itr ) // not found in definitions: invalid switch given!
+    {
+      return false;
+    }
   }
 
-  // ToDo: check if valuemap already has an entry (same reason)
-  //auto value_itr = m_valuemap.find( access_key );
   Option newEntry( require_itr->second );
 
   if( newEntry.m_have_arg == Option::no_argument && !value.empty() )
@@ -647,13 +782,19 @@ bool Optargs::append_option( const std::string& clean_key, const std::string& va
   {
     return false; // missing value
   }
-  else if( newEntry.m_have_arg != Option::no_argument && !value.empty() )
+  else if( newEntry.m_have_arg == Option::optional_argument && value.empty() && !newEntry.m_multi[0].empty() && newEntry.m_count==0 )
   {
-    newEntry.m_value = value;
+    ;//keep the default value as given value
   }
+  else if( (newEntry.m_have_arg == Option::optional_argument || newEntry.m_have_arg==Option::required_argument) && !value.empty() )
+  {
+    if( newEntry.m_count==0 ) //on 1st write kill the default
+      newEntry.m_multi.clear();
+    newEntry.m_multi.push_back( value );
+  }
+  newEntry.m_count++;
 
-  m_valuemap.insert( { access_key, newEntry } );
-
+  m_valuemap[ access_key ] = newEntry;
   return true;
 }
 
@@ -766,7 +907,7 @@ std::string Optargs::seek_key( const std::string& key ) const
 }
 
 
-bool Optargs::seek_option( const std::string& option, bool get_value, std::string& result ) const
+bool Optargs::seek_option( const std::string& option, bool get_value, int* pCount, std::string& result ) const
 {
   string search_key( conditional_uppercase( option, m_style ) );
   string clean_key = get_key( search_key ); // arg 2+3 are dummies here, we expect the user provided pure keys or hyphened/dashed keys.
@@ -778,9 +919,32 @@ bool Optargs::seek_option( const std::string& option, bool get_value, std::strin
   {
     if( get_value )
     {
-      result = value_itr->second.m_value;
+      int count = (pCount) ? *pCount : 0;
+
+      if( count<1 ) count=1; // count is 1-based index, if caller said "0" he means "no care, give me what U have"
+      if( count > value_itr->second.m_count )
+      {
+        if( pCount ) *pCount = value_itr->second.m_count;
+        return false;
+      }
+
+      if( value_itr->second.m_count>0 && value_itr->second.m_count<=value_itr->second.m_multi.size() )
+      {
+        result = value_itr->second.m_multi[count-1]; // count is 1-based index
+      }
+      if( pCount ) *pCount = value_itr->second.m_count;
     }
     return true;
+  }
+  else if( get_value ) // can we return the default value?
+  {
+    auto deflt_itr = m_requirements.find( access_key );
+    if( deflt_itr != m_requirements.end() )
+    {
+      result = deflt_itr->second.m_multi[0];
+      return true;
+    }
+    if( pCount ) *pCount = 0;
   }
 
   // neither a user assigned short key nor an auto generated one? -> so we don't have an entry in the main list
@@ -903,6 +1067,30 @@ std::vector<std::wstring> get_folder_contentW( const wchar_t* base_folder, bool 
 // ===================================================================
 // ====================== string handling ============================
 // ===================================================================
+static std::string basename_of_execT( const std::tstring& argv0 )
+{
+  return basename_of_exec( tstring_to_ascii( argv0 ) );
+}
+
+
+static std::string basename_of_exec( const std::string& argv0 )
+{
+  string exec_name( argv0 );
+
+  size_t pos = exec_name.find_last_of("\\:/");
+  if( exec_name.npos != pos && pos+1 < exec_name.length() )
+  {
+    exec_name = exec_name.substr( pos+1 ); // skip over the path
+
+    pos = exec_name.rfind(".exe");
+    if( exec_name.npos == pos ) pos = exec_name.rfind(".EXE");
+
+    if( exec_name.npos != pos )
+      exec_name = exec_name.substr( 0, pos ); // cut off an '.exe' suffix, if found.
+  }
+  return exec_name;
+}
+
 
 
 static void cut_string_at( const std::string& input, const std::string& separators, std::string& lhs, std::string& rhs )

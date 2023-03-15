@@ -1,22 +1,32 @@
 #ifndef NO_OPTARGS_PLUSPLUS
 #define NO_OPTARGS_PLUSPLUS
 
+#include <tchar.h>
 #include <string>
 #include <vector>
 #include <map>
 #include <stdexcept>
 
 
-// ToDo: evaluate https://www.codeproject.com/Tips/5261900/Cplusplus-Lightweight-Parsing-Command-Line-Argumen
-
-#if (defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ )
-// pure Windows
+#if (defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ ) // pure Windows
 #  define NOOAPP_DEFAULT_STYLE (No::Optargs::WINDOWS) // or better GNUWINMIX? No, let the user provide it if he wants out-of-usual
-#else
-// unixoids and MSYS/MinGW runtimes with real (ba)sh shell
+#else // unixoids and MSYS/MinGW runtimes with real (ba)sh shell
 #  define NOOAPP_DEFAULT_STYLE (No::Optargs::GNU)
 #endif
 
+
+namespace std
+{
+# if defined(UNICODE) || defined(_UNICODE)
+  typedef wstring tstring;
+  extern wostream& tcout;
+  extern wostream& tcerr;
+# else
+  typedef string tstring;
+  extern ostream& tcout;
+  extern ostream& tcerr;
+# endif // UNICODE
+}
 
 
 namespace No {
@@ -30,38 +40,51 @@ namespace No {
   #else
   #  define get_folder_contentT get_folder_contentA
   #endif
+#else
+  //not needed on unices, because the shell is doing the job
 #endif
 
 
 
-class Option
+class Option // always Ascii, because nobody would expect command line options and default to be non-latin
 {
 public:
   typedef enum { no_argument=0, required_argument, optional_argument } argtype;
 
-  Option( const char* long_keyname, const char short_key, argtype canhave_arg=no_argument, const char* default_val=nullptr, const char* helptext=nullptr )
+  Option( const char* long_keyname, const char short_key, argtype canhave_arg, const char* default_val=nullptr, const char* helptext=nullptr )
     : m_long_keyname( long_keyname ? long_keyname : "" )
     , m_short_keyname( short_key )
     , m_have_arg( canhave_arg )
-    , m_value( default_val ? default_val : "" )
+//  , m_value( default_val ? default_val : "" )
     , m_helptext( helptext ? helptext : "" )
+    , m_count(0)
+    , m_multi{ ((default_val) ? default_val : "") }
   {};
 
   Option( const char* long_keyname, const char short_key, const char* value=nullptr )
-    : Option( long_keyname, short_key, ((value && *value) ? required_argument : no_argument), value, nullptr )  // here we misuse "required_argument" to say "I have an argument assorted here"
+    : Option( long_keyname, short_key, ((value && *value) ? required_argument : no_argument), value )  // here we misuse "required_argument" to say "I have an argument assorted here"
   {};
 
-  Option() = delete;
+  Option()
+    : Option( "", '\0' )
+  {};
+
   ~Option(){};
-  
+  /*
+  Option(const Option&) = default;
+  Option& Option::operator=(const Option& rhs) = default;
+  Option& Option::operator=(Option&&) = default;*/
+
   friend class Optargs;
 
 private:
   std::string m_long_keyname; // i.e. "log-name" for --log-name
-  const char  m_short_keyname; // i.e. 'L' for -L, or '\x200' for --log-name has no short key 
+  char        m_short_keyname; // i.e. 'L' for -L, or '\x200' for --log-name has no short key 
   argtype     m_have_arg;
-  std::string m_value;
+//std::string m_value;
   std::string m_helptext;
+  int         m_count;
+  std::vector<std::string> m_multi;
 };
 
 
@@ -74,26 +97,31 @@ struct OptargNoParsed: public std::runtime_error { OptargNoParsed() : std::runti
 
 
 
-class Optargs
+class Optargs // pure UTF8 on unices, bit mixed UCS2(wchar_t), UTF an windows
 {
 public:
   typedef enum style_e { GNU=0, POSIX, OLDUNIX, WINDOWS, GNUWINMIX, unchanged/*keep last set*/ } style_t;  // oldunix is f.i. the format of linux "find . -type f -iname '*.cpp'", longopts with single hyphens
-  //typedef struct {bool needArg; bool canArg;} value_t;
 
-  Optargs( int argc, char* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
+  # if defined( __WIN32__ ) || defined( WIN32 )
+  Optargs( int argc, const wchar_t* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
+  # endif //defined( __WIN32__ ) || defined( WIN32 )
+
+  Optargs( int argc, const char* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
+  Optargs() {};
   ~Optargs();
 
-# if defined( __WIN32__ ) ||  defined( WIN32 )
-  Optargs( int argc, wchar_t* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
-# endif //defined( __WIN32__ ) ||  defined( WIN32 )
-
-  const std::string getOption( const std::string& option ) const;
-  const std::string getOption( const unsigned char opt_char ) const;
+  const std::vector<std::string> getOptionValues( const std::string& option ) const;
+  const std::string getOptionStr( const std::string& option, int index=1 ) const;
+  const std::string getOptionStr( const unsigned char opt_char, int index=1 ) const;
+  int  getOptionNum( const std::string& option ) const;
+  int  getOptionNum( const unsigned char opt_char ) const;
   bool hasOption( const std::string& option ) const;
   bool hasOption( const unsigned char opt_char ) const;
+
   void call_help( std::ostream& report_stream, const std::string& param = std::string() ) const;
   void listOptions( std::ostream& report_stream, const std::string& delimitter = std::string(", ") ) const;
   bool parse( std::string& last_option = std::string(), No::Optargs::style_t style = No::Optargs::unchanged );
+  bool parse( No::Optargs::style_t style = No::Optargs::unchanged ) { return parse( std::string(), style );};
 
 private:
   std::string make_next_access_key( void );
@@ -102,8 +130,9 @@ private:
   bool append_option( const std::string& long_keyname, const std::string& value );
   bool append_value( const std::string& value );
 
+  bool get_option_definition( const std::string &clean_key, Option& opt ) const;
   bool argument_requirement( const std::string& clean_key, Option::argtype& required ) const;
-  bool seek_option( const std::string& option, bool get_value=false, std::string& result=std::string() ) const;
+  bool seek_option( const std::string& option, bool get_value=false, int* pCount=nullptr, std::string& result=std::string() ) const;
   std::string get_key( const std::string& option, std::string& split_off_keys=std::string(/*n.u.*/), std::string& split_off_values=std::string(/*n.u.*/) ) const;
   std::string seek_key( const std::string& key ) const;
   bool know_key( const std::string& key ) const;
@@ -119,6 +148,7 @@ private:
   style_t m_style; // style of command line options of this whole instance
   unsigned int m_autonr; // internal counter for auto generated short-keys
   bool m_parsed;
+  std::string m_Progname;
 };
 
 } // namespace No
