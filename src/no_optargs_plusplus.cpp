@@ -146,7 +146,7 @@ Optargs::Optargs( int argc, const wchar_t * argv[], const std::vector<No::Option
 
 // todo: rework this to use UCS2, wchar_t, std::wstring completely if running in windows...
 
-  for( int i=1; i < argc; ++i )
+  for( int i=0; i < argc; ++i )
   {
     m_argv.push_back( WideString2UTF8( argv[i] ) );
   }
