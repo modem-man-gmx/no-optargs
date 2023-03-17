@@ -163,6 +163,7 @@ Optargs::~Optargs()
 // ===================================================================
 const std::vector<std::string> Optargs::getOptionValues( const std::string& option ) const
 {
+  if( ! m_parsed ) throw OptargNoParsed();
   string search_key( conditional_uppercase( option, m_style ) );
   string clean_key = get_key( search_key ); // arg 2+3 are dummies here, we expect the user provided pure keys or hyphened/dashed keys.
 
@@ -180,6 +181,7 @@ const std::vector<std::string> Optargs::getOptionValues( const std::string& opti
 
 const string Optargs::getOptionStr( const std::string& option, int index ) const
 {
+  if( ! m_parsed ) throw OptargNoParsed();
   string res("");
   int cnt=index;
   this->seek_option( option, true, &cnt, res );
@@ -187,31 +189,29 @@ const string Optargs::getOptionStr( const std::string& option, int index ) const
 }
 
 
-const std::string Optargs::getOptionStr( const unsigned char opt_char, int index ) const
+signed long Optargs::getOptionInt( const std::string& option, int index ) const
 {
   if( ! m_parsed ) throw OptargNoParsed();
-  string res("");
-  int cnt=index;
-  this->seek_option( string( 1, opt_char ), true, &cnt, res );
-  return res;
+  signed long result=0;
+  try
+  {
+    string number( getOptionStr(option, index) );
+    result = stol( number );
+  }
+  catch(...)
+  {  // intentionally ignore:
+     // std::invalid_argument if no conversion could be performed
+     // std::out_of_range if the converted value would fall out of the range of the result type
+  }
+  return result;
 }
 
 
-int Optargs::getOptionNum( const std::string & option ) const
+int Optargs::getOptionCnt( const std::string & option ) const
 {
+  if( ! m_parsed ) throw OptargNoParsed();
   int cnt=0;
   if( seek_option( option, true, &cnt ) )
-  {
-    return cnt;
-  }
-  return 0;
-}
-
-
-int Optargs::getOptionNum( const unsigned char opt_char ) const
-{
-  int cnt=0;
-  if( seek_option( string( 1, opt_char ), true, &cnt ) )
   {
     return cnt;
   }
@@ -225,12 +225,6 @@ bool Optargs::hasOption( const std::string& option ) const
   return seek_option( option );
 }
 
-
-bool Optargs::hasOption( const unsigned char opt_char ) const
-{
-  if( ! m_parsed ) throw OptargNoParsed();
-  return seek_option( string( 1, opt_char ) );
-}
 
 
 void Optargs::call_help( std::ostream& report_stream, const std::string& param ) const
@@ -928,7 +922,7 @@ bool Optargs::seek_option( const std::string& option, bool get_value, int* pCoun
         return false;
       }
 
-      if( value_itr->second.m_count>0 && value_itr->second.m_count<=value_itr->second.m_multi.size() )
+      if( value_itr->second.m_count>0 && value_itr->second.m_count <= (int)value_itr->second.m_multi.size() )
       {
         result = value_itr->second.m_multi[count-1]; // count is 1-based index
       }

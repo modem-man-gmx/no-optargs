@@ -55,7 +55,6 @@ public:
     : m_long_keyname( long_keyname ? long_keyname : "" )
     , m_short_keyname( short_key )
     , m_have_arg( canhave_arg )
-//  , m_value( default_val ? default_val : "" )
     , m_helptext( helptext ? helptext : "" )
     , m_count(0)
     , m_multi{ ((default_val) ? default_val : "") }
@@ -70,10 +69,6 @@ public:
   {};
 
   ~Option(){};
-  /*
-  Option(const Option&) = default;
-  Option& Option::operator=(const Option& rhs) = default;
-  Option& Option::operator=(Option&&) = default;*/
 
   friend class Optargs;
 
@@ -81,7 +76,6 @@ private:
   std::string m_long_keyname; // i.e. "log-name" for --log-name
   char        m_short_keyname; // i.e. 'L' for -L, or '\x200' for --log-name has no short key 
   argtype     m_have_arg;
-//std::string m_value;
   std::string m_helptext;
   int         m_count;
   std::vector<std::string> m_multi;
@@ -110,17 +104,20 @@ public:
   Optargs() {};
   ~Optargs();
 
-  const std::vector<std::string> getOptionValues( const std::string& option ) const;
-  const std::string getOptionStr( const std::string& option, int index=1 ) const;
-  const std::string getOptionStr( const unsigned char opt_char, int index=1 ) const;
-  int  getOptionNum( const std::string& option ) const;
-  int  getOptionNum( const unsigned char opt_char ) const;
-  bool hasOption( const std::string& option ) const;
-  bool hasOption( const unsigned char opt_char ) const;
+  const std::vector<std::string> getOptionValues( const std::string& option ) const; // get all (string) values for option, like --file 11 --file aa -f bb => {{11}, {aa}, {bb}}
+  const std::string getOptionStr( const std::string& option, int index=1 ) const; // get one (string) value for option, 1st is default (1-based index). like --file 11 --file aa -f bb => {11}
+  signed long getOptionInt( const std::string& option, int index=1 ) const; // get one (integer) value for option, 1st is default (1-based index). like --num 11 --num 22 -n 3 => {11}
+  int  getOptionCnt( const std::string& option ) const;  // get count of option(s), like --verbose --verbose -vvv => 5
+  bool hasOption( const std::string& option ) const; // just tell if option exist, regardless if bool, multiple, string, multiple strings ,...
 
-  void call_help( std::ostream& report_stream, const std::string& param = std::string() ) const;
-  void listOptions( std::ostream& report_stream, const std::string& delimitter = std::string(", ") ) const;
-  bool parse( std::string& last_option = std::string(), No::Optargs::style_t style = No::Optargs::unchanged );
+  inline const std::string getOptionStr( const unsigned char opt_char, int index=1 ) const {return getOptionStr(std::string(1,opt_char),index );}; // get one (string) value for single char option, 1st is default (1-based index). like --file 11 --file aa -f bb => {11}
+  inline signed long getOptionInt( const unsigned char opt_char, int index=1 ) const {return getOptionInt(std::string(1,opt_char),index );};  // get one (integer) value for single char option, 1st is default (1-based index). like --num 11 --num 22 -n 3 => {11}
+  inline int  getOptionCnt( const unsigned char opt_char ) const {return getOptionCnt(std::string(1,opt_char));}; // get count of for single char option(s), like -v -v -vvv => 5
+  inline bool hasOption( const unsigned char opt_char ) const {return hasOption(std::string(1,opt_char));}; // tell for single char key if option exist, regardless if bool, multiple, string, multiple strings ,...
+
+  void call_help( std::ostream& report_stream, const std::string& param = std::string() ) const; // invoke the help for a certain parameter - or for all together
+  void listOptions( std::ostream& report_stream, const std::string& delimitter = std::string(", ") ) const; // intended for debug or summarizing
+  bool parse( std::string& last_option = std::string(), No::Optargs::style_t style = No::Optargs::unchanged ); // call the parser ... REQUIRED after Construction
   bool parse( No::Optargs::style_t style = No::Optargs::unchanged ) { return parse( std::string(), style );};
 
 private:
