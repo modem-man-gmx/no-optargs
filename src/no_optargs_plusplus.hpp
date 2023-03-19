@@ -45,6 +45,18 @@ namespace No {
 #endif
 
 
+// used for help output recently. mybe later also in parser
+#define NOOAPP_GNU_PFX_LONG       "--"
+#define NOOAPP_GNU_PFX_CHAR       '-'
+#define NOOAPP_POSIX_PFX_LONG     "-"
+#define NOOAPP_POSIX_CHAR         '-'
+#define NOOAPP_OLDUNIX_PFX_LONG   "-"
+#define NOOAPP_OLDUNIX_CHAR       '-'
+#define NOOAPP_WINDOWS_PFX_LONG   "/"
+#define NOOAPP_WINDOWS_CHAR       '/'
+#define NOOAPP_GNUWINMIX_PFX_LONG "--"
+#define NOOAPP_GNUWINMIX_CHAR     '/'
+
 
 class Option // always Ascii, because nobody would expect command line options and default to be non-latin
 {

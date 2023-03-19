@@ -33,6 +33,11 @@ namespace No {
 #define NOOAPP_ACCESS_KEY_PFX "key@"
 #define NOOAPP_INTERNAL_HELP "@@@_internal_help_@@@"
 #define NOOAPP_STRINGIFY(a) #a
+#if defined( __WIN32__ ) ||  defined( WIN32 )
+# define NOOAPP_ANSI CP_ACP
+#else
+# define NOOAPP_ANSI 0
+#endif
 
 #if defined(DEBUG) || !defined(NDEBUG)
 # define HANDLE_PARSER_INCOMPLETE(msg) do{ std::cerr  << ((msg)) << std::endl; } while(0)
@@ -61,16 +66,24 @@ namespace No {
 
 static std::string  basename_of_execT( const std::tstring& argv0 );
 static std::string  basename_of_exec( const std::string& argv0 );
+static std::string  WideString2CP( const std::wstring& UCS2, unsigned int Codepage=NOOAPP_ANSI );
 static std::string  WideString2UTF8( const std::wstring& UCS2 );
 static std::wstring UTF8toWideString( const std::string& UTF8 );
 static void         cut_string_at( const std::string& input, const std::string& separators, std::string& lhs, std::string& rhs );
 static std::string  trim_quotes( const std::string& input, const std::string& separators );
+typedef std::map<std::string,std::string> PlaceholderReplace;
+static std::string  replace_placeholder( const std::string& input, const PlaceholderReplace& placeholders, const std::string& lead_in=std::string("$("), const std::string& lead_out=std::string(")") );
 static std::string  conditional_uppercase( const std::string& anycase, No::Optargs::style_t Style );
+static std::string  get_option_prefix_long( No::Optargs::style_t Style );
+static std::string  get_option_prefix_short(No::Optargs::style_t Style );
+
 #if defined(UNICODE) || defined(_UNICODE)
 # define tstring_to_ascii(a) WideString2UTF8(a)
 #else
 # define tstring_to_ascii(a) (a)
 #endif
+
+
 
 /* === 1 = POSIX Options ===
 Arguments are options if they begin with a hyphen delimiter ('-').
@@ -243,6 +256,8 @@ void Optargs::call_help( std::ostream& report_stream, const std::string& param )
   opt_itr = m_requirements.find( seek_key( NOOAPP_INTERNAL_HELP ) );
   if( m_requirements.end() != opt_itr && opt_itr->second.m_helptext.length() )
   {
+// ToDo:
+// replace_placeholder( const std::string& input, const PlaceholderReplace& placeholders, const std::string& lead_in=std::string("$("), const std::string& lead_out=std::string(")") );
     size_t before_name = opt_itr->second.m_helptext.find("$(Progname)");
     if( string::npos == before_name )
     {
@@ -256,7 +271,35 @@ void Optargs::call_help( std::ostream& report_stream, const std::string& param )
       report_stream << opt_itr->second.m_helptext.substr(after_name) << std::endl;
     }
   }
-  // neither parameter focused help text, nor generic help text assorted to 0x00 entry was found, stay silent ...  
+
+  string lpfx( get_option_prefix_long( m_style ) );
+  string cpfx( get_option_prefix_short(m_style ) );
+
+  size_t longest=0;
+  for( auto entry : m_requirements )
+  {
+    size_t len = entry.second.m_long_keyname.length();
+    if( len + lpfx.length() > longest ) longest = len + lpfx.length();
+  }
+  const size_t shortlen=2;
+
+  for( auto entry : m_requirements )
+  {
+    int have = 0;
+    if( !entry.second.m_long_keyname.empty()  ) have++;
+    if( isalnum(entry.second.m_short_keyname) ) have++;
+
+    if( ! entry.second.m_helptext.empty() && (have>0) )
+    {
+      string long_switches( (entry.second.m_long_keyname.empty())    ? "" : (lpfx + entry.second.m_long_keyname) );
+      string shrt_switches( (!isalnum(entry.second.m_short_keyname)) ? "" : (cpfx + string(1,entry.second.m_short_keyname)) );
+
+      long_switches.append( longest - long_switches.length(), ' ');
+      shrt_switches.append( shortlen- shrt_switches.length(), ' ');
+
+      report_stream << " " << shrt_switches << ((have>1)?", ": "  ") <<  long_switches << " " << entry.second.m_helptext << std::endl;
+    }
+  }
   return;
 }
 
@@ -1125,7 +1168,54 @@ static std::string trim_quotes( const std::string& input, const std::string& sep
 }
 
 
+static std::string replace_placeholder( const std::string& input, const PlaceholderReplace& placeholders, const std::string& lead_in, const std::string& lead_out )
+{
+  string result( input );
 
+  for( auto Placeholder : placeholders )
+  {
+    string Match( lead_in + Placeholder.first + lead_out );
+    size_t start;
+    while( result.npos != (start = result.find( Match )) )
+    {
+      result.replace( start, Match.length(), Placeholder.second ) ;
+    }
+  }
+  return result;
+}
+
+
+
+/* useful values in win32/win64 are:
+    CP_ACP (ANSI-Windows, default)
+    CP_OEMCP (437 or 1250 or ,,,)
+ */
+std::string WideString2CP( const std::wstring & UCS2, unsigned int Codepage )
+{
+  string UTF8("");
+
+  # if (defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ )
+  int size_needed = ::WideCharToMultiByte( Codepage, WC_NO_BEST_FIT_CHARS, UCS2.c_str(), -1, nullptr, 0, nullptr, nullptr );
+  if( size_needed > 0 )
+  {
+    //char* converted = new char[ size_needed ];
+    //*converted = 0;
+    UTF8.resize( size_needed + 10 );
+    int res = ::WideCharToMultiByte( Codepage, WC_NO_BEST_FIT_CHARS, UCS2.c_str(), -1, &UTF8[0], (int)UTF8.size(), nullptr, nullptr );
+    if( res > 0 )
+    {
+      //delete [] converted;
+      UTF8.resize( res-1 );
+      return UTF8;
+    }
+  }
+  DWORD error = ::GetLastError();
+  string err_msg = std::system_category().message( (int) error );
+  throw OptargConvertF( string("ERROR WideString2UTF8: ") + err_msg );
+  # else // non-windows platforms ...
+  return UTF8;
+  # endif
+}
 
 
 
@@ -1179,6 +1269,53 @@ static std::wstring UTF8toWideString( const std::string& UTF8 )
 # else // non-windows platforms ...
   return UCS;
 # endif
+}
+
+
+static std::string get_option_prefix( No::Optargs::style_t Style, bool bForLongOption )
+{
+  string prefix;
+  char* lpfx = "";
+  char  cpfx = '\0';
+  switch( Style )
+  {
+    case No::Optargs::GNU       :
+      lpfx = NOOAPP_GNU_PFX_LONG;      //  "--"
+      cpfx = NOOAPP_GNU_PFX_CHAR;      //  '-'
+      break;
+    case No::Optargs::POSIX     :
+      lpfx = NOOAPP_POSIX_PFX_LONG;    //  "-"
+      cpfx = NOOAPP_POSIX_CHAR;        //  '-'
+      break;
+    case No::Optargs::OLDUNIX   :
+      lpfx = NOOAPP_OLDUNIX_PFX_LONG;  //  "-"
+      cpfx = NOOAPP_OLDUNIX_CHAR;      //  '-'
+      break;
+    case No::Optargs::WINDOWS   :
+      lpfx = NOOAPP_WINDOWS_PFX_LONG;  //  "/"
+      cpfx = NOOAPP_WINDOWS_CHAR;      //  '/'
+      break;
+    case No::Optargs::GNUWINMIX :
+      lpfx = NOOAPP_GNUWINMIX_PFX_LONG;//  "--"
+      cpfx = NOOAPP_GNUWINMIX_CHAR;    //  '/'
+      break;
+  }
+  
+  if( bForLongOption )
+    return string( lpfx );
+  else
+    return string( 1, cpfx );
+}
+
+
+static std::string get_option_prefix_long( No::Optargs::style_t Style )
+{
+  return get_option_prefix( Style, true );
+}
+
+static std::string get_option_prefix_short(No::Optargs::style_t Style )
+{
+  return get_option_prefix( Style, false );
 }
 
 
