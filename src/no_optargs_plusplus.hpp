@@ -108,11 +108,12 @@ class Optargs // pure UTF8 on unices, bit mixed UCS2(wchar_t), UTF an windows
 public:
   typedef enum style_e { GNU=0, POSIX, OLDUNIX, WINDOWS, GNUWINMIX, unchanged/*keep last set*/ } style_t;  // oldunix is f.i. the format of linux "find . -type f -iname '*.cpp'", longopts with single hyphens
 
-  # if defined( __WIN32__ ) || defined( WIN32 )
+  #if (defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ ) && !defined( __MINGW32__ ) && !defined( __MINGW64__ )
   Optargs( int argc, const wchar_t* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
-  # endif //defined( __WIN32__ ) || defined( WIN32 )
+  #endif //(defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ ) && !defined( __MINGW32__ ) && !defined( __MINGW64__ )
 
   Optargs( int argc, const char* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style=NOOAPP_DEFAULT_STYLE );
+
   Optargs() {};
   ~Optargs();
 

@@ -141,8 +141,8 @@ Optargs::Optargs( int argc, const char* argv[], const std::vector<No::Option>& L
   }
 };
 
-#if defined( __WIN32__ ) ||  defined( WIN32 )
-Optargs::Optargs( int argc, const wchar_t * argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
+#if (defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ ) && !defined( __MINGW32__ ) && !defined( __MINGW64__ )
+Optargs::Optargs( int argc, const wchar_t* argv[], const std::vector<No::Option>& Liste, No::Optargs::style_t style )
   : m_requirements()
   , m_valuemap() // hold every value accessible by a short key (if no short key exist, one artifical short will be made for the long key)
   , m_access_by_name_map()  // find shortname of longname, if none exist, one artifical short will be assigned
@@ -164,7 +164,7 @@ Optargs::Optargs( int argc, const wchar_t * argv[], const std::vector<No::Option
     m_argv.push_back( WideString2UTF8( argv[i] ) );
   }
 };
-#endif //defined( __WIN32__ ) ||  defined( WIN32 )
+#endif //(defined( __WIN32__ ) || defined( WIN32 )) && !defined( __CYGWIN__ ) && !defined( __MINGW32__ ) && !defined( __MINGW64__ )
 
 
 
@@ -256,20 +256,8 @@ void Optargs::call_help( std::ostream& report_stream, const std::string& param )
   opt_itr = m_requirements.find( seek_key( NOOAPP_INTERNAL_HELP ) );
   if( m_requirements.end() != opt_itr && opt_itr->second.m_helptext.length() )
   {
-// ToDo:
-// replace_placeholder( const std::string& input, const PlaceholderReplace& placeholders, const std::string& lead_in=std::string("$("), const std::string& lead_out=std::string(")") );
-    size_t before_name = opt_itr->second.m_helptext.find("$(Progname)");
-    if( string::npos == before_name )
-    {
-      report_stream << opt_itr->second.m_helptext << std::endl;
-    }
-    else
-    {
-      size_t after_name = before_name + strlen("$(Progname)");
-      report_stream << opt_itr->second.m_helptext.substr(0,before_name);
-      report_stream << this->m_Progname;
-      report_stream << opt_itr->second.m_helptext.substr(after_name) << std::endl;
-    }
+    PlaceholderReplace PH={{ "Progname", this->m_Progname}};
+    report_stream << replace_placeholder( opt_itr->second.m_helptext, PH, string("$("), string(")") ) << std::endl;
   }
 
   string lpfx( get_option_prefix_long( m_style ) );
